@@ -66922,24 +66922,6 @@ void UWeaponSegment::SetWeaponIndex(int32 InWeaponIndex)
 // Parameters:
 // class AWeapon*                          ReturnValue                                            (Parm, OutParm, ZeroConstructor, ReturnParm, IsPlainOldData, NoDestructor, HasGetValueTypeHash, NativeAccessSpecifierPublic)
 
-class AWeapon* UWeaponSegment::GetWeapon() const
-{
-	static class UFunction* Func = nullptr;
-
-	if (Func == nullptr)
-		Func = Class->GetFunction("WeaponSegment", "GetWeapon");
-
-	Params::WeaponSegment_GetWeapon Parms{};
-
-	auto Flgs = Func->FunctionFlags;
-	Func->FunctionFlags |= 0x400;
-
-	UObject::ProcessEvent(Func, &Parms);
-
-	Func->FunctionFlags = Flgs;
-
-	return Parms.ReturnValue;
-}
 
 
 // Function Flame.WeaponsFunctions.AreWeaponAndAmmoCompatible

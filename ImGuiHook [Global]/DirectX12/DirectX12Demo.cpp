@@ -149,7 +149,7 @@ SDK::AActor* closest_actor = nullptr;
 float aimbot_distance = 100.0f;
 SDK::FVector closest_actor_head; 
 SDK::FRotator closest_actor_rotation; 
-float MaxDistance = FLT_MAX;
+float MaxDistance = 100.00f;
 SDK::UWorld* World = SDK::UWorld::GetWorld();
 SDK::ULevel* Level = World->PersistentLevel;
 SDK::APlayerController* MyController = World->OwningGameInstance->LocalPlayers.Num() > 0 ?
@@ -158,7 +158,7 @@ SDK::USkinnedMeshComponent* mesh = nullptr;
 bool bAim = false; 
 bool bAimbotEnabled = false; 
 bool bVisCheck = false;
-bool bMagicBullet = false;
+
 bool bTpToEnemies = false;
 float AimbotFov = 50.0f;
 float cfg_AimbotSmoothing = 2.0f;
@@ -183,7 +183,10 @@ namespace gl {
         bool FastFly = false;
         bool FastAcceleration = false;
         bool GodMode = false;
+        bool Ammo = false;
         float MaxSpeed = 10000.0f;
+        bool AddHealth = false;
+        bool bMagicBullet = false;
     }
 }
 
@@ -201,19 +204,67 @@ std::string RotatorToString(const SDK::FRotator& rot)
 {
     return "Pitch: " + std::to_string(rot.Pitch) + ", Yaw: " + std::to_string(rot.Yaw) + ", Roll: " + std::to_string(rot.Roll);
 }
+#include <algorithm>
 
+#include <chrono>
+std::vector<SDK::AActor*> PlayerSet;
+std::chrono::steady_clock::time_point LastUpdateTime;
+const std::chrono::duration<float> UpdateInterval = std::chrono::seconds(1); // Update every 1 second
+
+void SmoothAim(SDK::FRotator currentRotation, SDK::FRotator targetRotation, float smoothFactor)
+{
+    // Smooth transition between current and target rotation
+    const float deltaTime = 1.0f / 60.0f; // Assuming 60 FPS for now
+    SDK::FRotator smoothedRotation = SDK::UKismetMathLibrary::RInterpTo(currentRotation, targetRotation, deltaTime, smoothFactor);
+
+    MyController->SetControlRotation(smoothedRotation);
+}
+
+void UpdatePlayerList()
+{
+    auto CurrentTime = std::chrono::steady_clock::now();
+    if (CurrentTime - LastUpdateTime < UpdateInterval)
+    {
+        return; // Skip update if not enough time has passed
+    }
+
+    LastUpdateTime = CurrentTime;
+    PlayerSet.clear();
+
+    SDK::TArray<SDK::AActor*>& actors = World->PersistentLevel->Actors;
+    for (int i = 0; i < actors.Num(); i++)
+    {
+        SDK::AActor* actor = actors[i];
+        if (actor && actor->IsA(SDK::AHumanPlayerCharacter::StaticClass()))
+        {
+            PlayerSet.push_back(actor);
+        }
+    }
+}
+
+void SetUnlimitedAmmo(SDK::AProjectileWeapon* Weapon)
+{
+    if (Weapon)
+    {
+        Weapon->CurrentAmmoCount = 1000;        // Set the current ammo to 1000
+        Weapon->ChamberLoadedAmmo = 1000;       // Set the chamber loaded ammo to 1000 as well
+        Weapon->MagazineSize = 1000;             // Optionally set the magazine size to 1000
+        Weapon->ChamberSize = 1000;              // Optionally set the chamber size to 1000
+
+        // Notify clients about the ammo change if necessary
+        Weapon->OnRep_AmmoCount(Weapon->CurrentAmmoCount);
+        Weapon->OnRep_ChamberLoadedAmmoCount(Weapon->ChamberLoadedAmmo);
+    }
+}
 
 
 void GameLoop()
 {
-
     SDK::AActor* actor_list{};
     SDK::TArray<SDK::AActor*> actors{};
 
-
     World = SDK::UWorld::GetWorld();
     SDK::UEngine* gEngine = SDK::UEngine::GetEngine();
-
 
     if (!World)
     {
@@ -221,11 +272,20 @@ void GameLoop()
         return;
     }
 
-  
-    PlayerList.clear();
-    WorldActors.clear();
+    // Initialize the last update time if not set yet
+    if (LastUpdateTime.time_since_epoch().count() == 0)
+    {
+        LastUpdateTime = std::chrono::steady_clock::now();
+    }
 
-    actors = World->PersistentLevel->Actors;
+    // Update the player list periodically
+    UpdatePlayerList();
+
+    if (PlayerSet.size() == 0)
+    {
+        LogMessage("No players in PlayerSet");
+        return;
+    }
 
     MyController = World->OwningGameInstance->LocalPlayers[0]->PlayerController;
     if (!MyController)
@@ -234,196 +294,200 @@ void GameLoop()
         return;
     }
 
+    // Process the PlayerSet for aimbot logic
+    LogMessage("Processing PlayerSet, count: " + std::to_string(PlayerSet.size()));
 
-    for (int i = 0; i < actors.Num(); i++)
+    float MaxDistance = FLT_MAX;
+    SDK::AActor* closest_actor = nullptr;
+    SDK::FRotator closest_actor_rotation{};
+    SDK::FVector closest_actor_head{};
+
+    for (int i = 0; i < PlayerSet.size(); i++)
     {
-        actor_list = actors[i];
+        SDK::AActor* actor = PlayerSet[i];
+        if (!actor || !actor->RootComponent) continue;
 
-        if (!actor_list || !actor_list->RootComponent)
+        SDK::AHumanPlayerCharacter* humanCharacter = static_cast<SDK::AHumanPlayerCharacter*>(actor);
+        if (!humanCharacter) continue;
+
+        auto ActorState = humanCharacter->PlayerState;
+
+        if (!MyController->PlayerCameraManager)
         {
-            LogMessage("Skipping actor: null or no RootComponent");
+            LogMessage("PlayerCameraManager is null");
             continue;
         }
-        if (actor_list->RootComponent->RelativeLocation.IsZero())
+
+        auto CameraLocation = MyController->PlayerCameraManager->GetCameraLocation();
+        auto CameraRotation = MyController->PlayerCameraManager->GetCameraRotation();
+
+        auto LocalCharacter = reinterpret_cast<SDK::AHumanPlayerCharacter*>(MyController->Character);
+        auto CharacterMovement = LocalCharacter->CharacterMovement;
+
+        // Exploits handling
+        if (gl::Exploits::SuperSpeed)
         {
-            LogMessage("Skipping actor: Zero RelativeLocation");
-            continue;
-        }
+            if (LocalCharacter) {
+                SDK::AWeapon* CurrentWeapon = static_cast<SDK::AWeapon*>(LocalCharacter->Inventory->CurrentWeapon.Get());
+                // Ensure CurrentWeapon is valid and of type AProjectileWeapon
+                if (CurrentWeapon) {
+                    // Attempt to cast CurrentWeapon to AProjectileWeapon
+                    SDK::AProjectileWeapon* ProjectileWeapon = static_cast<SDK::AProjectileWeapon*>(CurrentWeapon);
+                    // Check if the cast was successful
+                    if (ProjectileWeapon) {
+                        SDK::FVector_NetQuantize BulletLocation = static_cast<SDK::FVector_NetQuantize>(closest_actor_head);
+                        SDK::TArray<SDK::FVector_NetQuantizeNormal> BulletDirections;
 
-        // Check if the actor is of type AHumanPlayerCharacter
-        if (actor_list->IsA(SDK::AHumanPlayerCharacter::StaticClass()))
-        {
-            LogMessage("Adding actor to PlayerList: " + actor_list->GetName());
-            PlayerList.push_back(actor_list);
-        }
+                        // Create an instance of FVector_NetQuantizeNormal and set its values
+                        SDK::FVector_NetQuantizeNormal direction;
+                        direction.X = 1.0f;
+                        direction.Y = 1.0f;
+                        direction.Z = 1.0f;
+                        BulletDirections.Add(direction);
 
-     
-    }
-
-  
-
-    // Process the PlayerList for aimbot logic
-    if (PlayerList.size() > 0)
-    {
-        LogMessage("PlayerList found: " + std::to_string(PlayerList.size()));
-
-        float MaxDistance = FLT_MAX;
-        SDK::AActor* closest_actor = nullptr;
-        SDK::FRotator closest_actor_rotation{};
-        SDK::FVector closest_actor_head{};
-
-        for (int i = 0; i < PlayerList.size(); i++)
-        {
-            if (!PlayerList[i]) continue;
-
-            SDK::AActor* actor = PlayerList[i];
-            if (!actor->RootComponent) continue;
-
-   
-            SDK::AHumanPlayerCharacter* humanCharacter = static_cast<SDK::AHumanPlayerCharacter*>(actor);
-            if (!humanCharacter) continue;
-
-            auto ActorState = humanCharacter->PlayerState;
-
-            if (!MyController->PlayerCameraManager)
-            {
-                LogMessage("PlayerCameraManager is null");
-                continue;
-            }
-
-            auto CameraLocation = MyController->PlayerCameraManager->GetCameraLocation();
-            auto CameraRotation = MyController->PlayerCameraManager->GetCameraRotation();
-
-            LogMessage("Camera Location: " + VectorToString(CameraLocation));
-            LogMessage("Camera Rotation: " + RotatorToString(CameraRotation));
-
-            auto LocalCharacter = reinterpret_cast<SDK::AHumanPlayerCharacter*>(MyController->Character);
-            auto CharacterMovement = LocalCharacter->CharacterMovement;
-
-            // Exploits handling
-            if (gl::Exploits::SuperSpeed)
-            {
-                LogMessage("SuperSpeed exploit activated");
-                CharacterMovement->MaxWalkSpeed = gl::Exploits::MaxSpeed;
-            }
-            if (gl::Exploits::FastAcceleration)
-            {
-                LogMessage("FastAcceleration exploit activated");
-                CharacterMovement->MaxAcceleration = gl::Exploits::MaxSpeed;
-            }
-            if (gl::Exploits::GodMode)
-            {
-                LogMessage("GodMode exploit activated");
-                LocalCharacter->HealthComponent->MaxHealth = LocalCharacter->HealthComponent->CurrentTrueHealth + 1000;
-            }
-
-           
-            auto LocalPos = LocalCharacter->RootComponent->RelativeLocation;
-
-            auto mesh = humanCharacter->Mesh;
-            SDK::FVector location = humanCharacter->RootComponent->RelativeLocation;
-            float ActorDistance = LocalPos.GetDistanceToInMeters(location);
-
-            LogMessage("Actor distance: " + std::to_string(ActorDistance) + " meters");
-
-            SDK::FVector head_bone_pos = mesh->GetSocketLocation(StrToName("Head"));
-            SDK::FVector feet_bone_pos = mesh->GetSocketLocation(StrToName("Leg"));
-            SDK::FVector feet_middle_pos = { location.X, location.Y, feet_bone_pos.Z };
-
-            LogMessage("Head position: " + VectorToString(head_bone_pos));
-            LogMessage("Feet position: " + VectorToString(feet_bone_pos));
-
-            SDK::FVector2D Bottom{};
-            SDK::FVector2D Top{};
-            if (MyController->ProjectWorldLocationToScreen(feet_middle_pos, &Bottom, false) &&
-                MyController->ProjectWorldLocationToScreen(head_bone_pos, &Top, false))
-            {
-                const float h = std::abs(Top.Y - Bottom.Y);
-                const float w = h * 0.2f;
-
-                LogMessage("Screen projection successful. Top: " + Vector2DToString(Top) + ", Bottom: " + Vector2DToString(Bottom));
-
-                if (gl::Aimbot::Aimbot)
-                {
-                    LogMessage("Aimbot enabled, processing target");
-                    auto rot = SDK::UKismetMathLibrary::FindLookAtRotation(CameraLocation, head_bone_pos);
-                    LogMessage("Calculated rotation: " + RotatorToString(rot));
-
-                    SDK::FVector2D screen_middle = { 2650 / 2, 1080 / 2 };
-
-                    float aimbot_distance = SDK::UKismetMathLibrary::Distance2D(Top, screen_middle);
-
-                    LogMessage("Aimbot distance: " + std::to_string(aimbot_distance));
-
-                    if (aimbot_distance < MaxDistance && aimbot_distance)
-                    {
-                        LogMessage("Found a closer target");
-                        MaxDistance = aimbot_distance;
-                        closest_actor = actor;
-                        closest_actor_rotation = rot;
-                        closest_actor_head = head_bone_pos;
+                        // Call the multicast function on the ProjectileWeapon instance
+                        ProjectileWeapon->MulticastFireBullet(BulletLocation, BulletDirections, true);
                     }
                 }
             }
-            else
-            {
-                LogMessage("Failed to project actor to screen");
-            }
+
+          
+          
+        }
+        if (gl::Exploits::FastAcceleration)
+        {
+           
+         
+            LocalCharacter->StaminaComponent->Stamina = 9999999.0f;
+    
         }
 
-        if (closest_actor && gl::Aimbot::Aimbot)
+        if (gl::Exploits::AddHealth) {
+            float Amount = 30.00f;
+            LocalCharacter->HealthComponent->AddTrueHealth(Amount);
+            
+        }
+        if (gl::Exploits::GodMode && LocalCharacter && LocalCharacter->HealthComponent)
         {
-            if (GetAsyncKeyState(VK_RBUTTON))
-            {
-                LogMessage("Right mouse button is pressed");
-                LogMessage("Aiming at closest actor: " + closest_actor->GetName());
-                LogMessage("Target position: " + VectorToString(closest_actor_head));
-                LogMessage("Camera position: " + VectorToString(MyController->PlayerCameraManager->GetCameraLocation()));
-                LogMessage("Current rotation: " + RotatorToString(MyController->GetControlRotation()));
-                LogMessage("Target rotation: " + RotatorToString(closest_actor_rotation));
+            LogMessage("GodMode enabled: setting invincibility and health.");
 
-                // Smooth aiming
-                if (closest_actor && gl::Aimbot::Aimbot && GetAsyncKeyState(VK_RBUTTON))
+            // Set invincibility
+            LocalCharacter->HealthComponent->SetInvincibility(true);
+
+            // Set a very high value for health and ensure health never decreases
+            float MaxHealth = 99999.0f;
+            LocalCharacter->HealthComponent->SetMaxHealth(MaxHealth);
+            LocalCharacter->HealthComponent->CurrentHealth = MaxHealth;
+            LocalCharacter->HealthComponent->CurrentTrueHealth = MaxHealth;
+            LocalCharacter->HealthComponent->CurrentTempHealth = MaxHealth;
+
+      
+
+            // Check invincibility status for debugging
+            bool isInvincible = LocalCharacter->HealthComponent->GetInvincibility();
+            LogMessage(isInvincible ? "Invincibility is active." : "Invincibility is not active.");
+        }
+
+        if (gl::Exploits::Ammo)
+        {
+            if (LocalCharacter && LocalCharacter->Inventory)
+            {
+                SDK::AWeapon* CurrentWeapon = static_cast<SDK::AWeapon*>(LocalCharacter->Inventory->CurrentWeapon.Get());
+                if (CurrentWeapon)
                 {
-                    LogMessage("Aiming at closest actor");
-                    MyController->SetControlRotation(closest_actor_rotation); // Directly set the control rotation to the target
+                    int AmmoCount = LocalCharacter->Inventory->GetAmmoCountForWeapon(CurrentWeapon);
+
+                    // Use static_cast here
+                    if (SDK::AProjectileWeapon* ProjectileWeapon = static_cast<SDK::AProjectileWeapon*>(CurrentWeapon))
+                    {
+                        ProjectileWeapon->CurrentAmmoCount = 1000;
+                    }
                 }
-
-
-                LogMessage("Rotation after set: " + RotatorToString(MyController->GetControlRotation()));
             }
-            else
-            {
-                LogMessage("Right mouse button is not pressed");
+        }
+        if (gl::Exploits::bMagicBullet) {
+            // Ensure LocalCharacter is valid
+            if (LocalCharacter) {
+                SDK::AWeapon* CurrentWeapon = static_cast<SDK::AWeapon*>(LocalCharacter->Inventory->CurrentWeapon.Get());
+                // Ensure CurrentWeapon is valid and of type AProjectileWeapon
+                if (CurrentWeapon) {
+                    // Attempt to cast CurrentWeapon to AProjectileWeapon
+                    SDK::AProjectileWeapon* ProjectileWeapon = static_cast<SDK::AProjectileWeapon*>(CurrentWeapon);
+                    // Check if the cast was successful
+                    if (ProjectileWeapon) {
+                        SDK::FVector_NetQuantize BulletLocation = static_cast<SDK::FVector_NetQuantize>(closest_actor_head);
+                        SDK::TArray<SDK::FVector_NetQuantizeNormal> BulletDirections;
+
+                        // Create an instance of FVector_NetQuantizeNormal and set its values
+                        SDK::FVector_NetQuantizeNormal direction;
+                        direction.X = 1.0f;
+                        direction.Y = 1.0f;
+                        direction.Z = 1.0f;
+                        BulletDirections.Add(direction);
+
+                        // Call the multicast function on the ProjectileWeapon instance
+                        ProjectileWeapon->MulticastFireBullet(BulletLocation, BulletDirections, true);
+                    }
+                }
             }
         }
 
 
-        else
+
+
+
+
+
+
+
+
+        auto LocalPos = LocalCharacter->RootComponent->RelativeLocation;
+        auto mesh = humanCharacter->Mesh;
+        SDK::FVector location = humanCharacter->RootComponent->RelativeLocation;
+        float ActorDistance = LocalPos.GetDistanceToInMeters(location);
+
+        SDK::FVector head_bone_pos = mesh->GetSocketLocation(StrToName("Head"));
+        SDK::FVector feet_bone_pos = mesh->GetSocketLocation(StrToName("Leg"));
+        SDK::FVector feet_middle_pos = { location.X, location.Y, feet_bone_pos.Z };
+
+        SDK::FVector2D Bottom{}, Top{};
+        if (MyController->ProjectWorldLocationToScreen(feet_middle_pos, &Bottom, false) &&
+            MyController->ProjectWorldLocationToScreen(head_bone_pos, &Top, false))
         {
-            LogMessage("No aiming: closest_actor valid: " + std::to_string(closest_actor != nullptr) +
-                ", Aimbot enabled: " + std::to_string(gl::Aimbot::Aimbot));
+            const float h = std::abs(Top.Y - Bottom.Y);
+            const float w = h * 0.2f;
+
+            if (gl::Aimbot::Aimbot)
+            {
+
+                auto rot = SDK::UKismetMathLibrary::FindLookAtRotation(CameraLocation, head_bone_pos);
+                SDK::FVector2D screen_middle = { 2650 / 2, 1080 / 2 };
+                float aimbot_distance = SDK::UKismetMathLibrary::Distance2D(Top, screen_middle);
+
+                if (aimbot_distance < MaxDistance && aimbot_distance)
+                {
+                    MaxDistance = aimbot_distance;
+                    closest_actor = actor;
+                    closest_actor_rotation = rot;
+                    closest_actor_head = head_bone_pos;
+                }
+            }
         }
     }
-    else
+
+    if (closest_actor && gl::Aimbot::Aimbot )
     {
-        LogMessage("No players in PlayerList");
+        if (GetAsyncKeyState(VK_RBUTTON))
+        {
+            LogMessage("Right mouse button is pressed");
+            SmoothAim(MyController->GetControlRotation(), closest_actor_rotation, 5.0f); // Adjust '5.0f' for different smoothness
+        }
+
     }
 
-    //if (bMagicBullet)
-    //{
-    //    SDK::UHumanAnimInstace* AnimInstance = static_cast<SDK::UHumanAnimInstace>(GetMesh()->GetAnimInstance());
-    //    SDK::AWeapon* CurrentWeapon = AnimInstance->GetCurrentWeapon();
-    //    if (CurrentWeapon)
-    //    {
-    //        // Define the bullet rotation (you may want to calculate this based on the target)
-    //        SDK::FRotator BulletRotation = (closest_actor_head - GetActorLocation()).Rotation();
-
-    //        // Call the OnFire method with the calculated rotation and target location
-    //        CurrentWeapon->OnFire(BulletRotation, closest_actor_head);
-    //    }
-
-    //}
+    
+    
+    
 }
 
 
@@ -635,15 +699,16 @@ void RenderESP()
 
         ImGui::Checkbox("Enable ESP", &bShowESP);
        ImGui::Checkbox("Enable Aimbot", &gl::Aimbot::Aimbot);
-       ImGui::Checkbox("Enable aceleration", &gl::Exploits::FastAcceleration);
-       ImGui::Checkbox("Enable fly", &gl::Exploits::SuperSpeed);
-     
+       ImGui::Checkbox("Enable Unlimited stamina", &gl::Exploits::FastAcceleration);
+      // ImGui::Checkbox("Enable add health", &gl::Exploits::AddHealth);
+      // ImGui::Checkbox("Magic bullet", &gl::Exploits::bMagicBullet);
        if (gl::Aimbot::Aimbot)
        {
            ImGui::SliderFloat("Aimbot FOV", &gl::Aimbot::Fov, 10.0f, 360.0f);
        }
 
-       ImGui::Checkbox("God Mode", &gl::Exploits::GodMode);
+      // ImGui::Checkbox("God Mode", &gl::Exploits::GodMode);
+       ImGui::Checkbox("Unlimited ammo", &gl::Exploits::Ammo);
 
 
 
@@ -812,6 +877,19 @@ HRESULT APIENTRY MJPresent(IDXGISwapChain3* pSwapChain, UINT SyncInterval, UINT 
     if (gl::Exploits::FastAcceleration)
     {
         GameLoop();
+    }
+    if (gl::Exploits::bMagicBullet)
+    {
+        GameLoop();
+    }
+    if (gl::Exploits::AddHealth)
+    {
+        GameLoop();
+    }
+    if (gl::Exploits::Ammo)
+    {
+        GameLoop();
+   
     }
 
 
