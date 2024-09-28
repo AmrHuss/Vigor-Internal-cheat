@@ -11,7 +11,8 @@
 #include "SDK.hpp"
 #include <fstream>  
 #include "SDK/Flame_classes.hpp"
-
+#include <locale>
+#include <codecvt>
 #include <string>
 #include <vector>
 #pragma comment(lib,"libMinHook.x64.lib")
@@ -182,11 +183,14 @@ namespace gl {
         bool SuperSpeed = false;
         bool FastFly = false;
         bool FastAcceleration = false;
+        bool GodModee = false;
         bool GodMode = false;
         bool Ammo = false;
         float MaxSpeed = 10000.0f;
         bool AddHealth = false;
+        bool AddFood = false;
         bool bMagicBullet = false;
+        bool WeaponSkin = false;
     }
 }
 
@@ -242,6 +246,9 @@ void UpdatePlayerList()
     }
 }
 
+
+
+
 void SetUnlimitedAmmo(SDK::AProjectileWeapon* Weapon)
 {
     if (Weapon)
@@ -256,6 +263,17 @@ void SetUnlimitedAmmo(SDK::AProjectileWeapon* Weapon)
         Weapon->OnRep_ChamberLoadedAmmoCount(Weapon->ChamberLoadedAmmo);
     }
 }
+
+std::string WideCharToUTF8(const std::wstring& wstr)
+{
+    if (wstr.empty()) return std::string();
+    int sizeNeeded = WideCharToMultiByte(CP_UTF8, 0, &wstr[0], (int)wstr.size(), NULL, 0, NULL, NULL);
+    std::string strTo(sizeNeeded, 0);
+    WideCharToMultiByte(CP_UTF8, 0, &wstr[0], (int)wstr.size(), &strTo[0], sizeNeeded, NULL, NULL);
+    return strTo;
+}
+
+
 
 
 void GameLoop()
@@ -294,8 +312,7 @@ void GameLoop()
         return;
     }
 
-    // Process the PlayerSet for aimbot logic
-    LogMessage("Processing PlayerSet, count: " + std::to_string(PlayerSet.size()));
+    // Process the PlayerSet for aimbot 
 
     float MaxDistance = FLT_MAX;
     SDK::AActor* closest_actor = nullptr;
@@ -351,42 +368,39 @@ void GameLoop()
                 }
             }
 
-          
-          
+
+
         }
+
+
+      
+
+
+
+
         if (gl::Exploits::FastAcceleration)
         {
-           
-         
+
+
             LocalCharacter->StaminaComponent->Stamina = 9999999.0f;
-    
+            LocalCharacter->bBulletTrajectoryBlocked = false;
+
+
+
         }
 
         if (gl::Exploits::AddHealth) {
             float Amount = 30.00f;
-            LocalCharacter->HealthComponent->AddTrueHealth(Amount);
-            
-        }
-        if (gl::Exploits::GodMode && LocalCharacter && LocalCharacter->HealthComponent)
-        {
-            LogMessage("GodMode enabled: setting invincibility and health.");
-
-            // Set invincibility
-            LocalCharacter->HealthComponent->SetInvincibility(true);
-
-            // Set a very high value for health and ensure health never decreases
-            float MaxHealth = 99999.0f;
-            LocalCharacter->HealthComponent->SetMaxHealth(MaxHealth);
-            LocalCharacter->HealthComponent->CurrentHealth = MaxHealth;
-            LocalCharacter->HealthComponent->CurrentTrueHealth = MaxHealth;
-            LocalCharacter->HealthComponent->CurrentTempHealth = MaxHealth;
-
       
-
-            // Check invincibility status for debugging
-            bool isInvincible = LocalCharacter->HealthComponent->GetInvincibility();
-            LogMessage(isInvincible ? "Invincibility is active." : "Invincibility is not active.");
         }
+
+
+
+            if (gl::Exploits::GodModee)
+            {
+                LocalCharacter->HealthComponent->SetTemporaryInvincibility(90);
+            }
+
 
         if (gl::Exploits::Ammo)
         {
@@ -400,40 +414,15 @@ void GameLoop()
                     // Use static_cast here
                     if (SDK::AProjectileWeapon* ProjectileWeapon = static_cast<SDK::AProjectileWeapon*>(CurrentWeapon))
                     {
-                        ProjectileWeapon->CurrentAmmoCount = 1000;
+                        ProjectileWeapon->CurrentAmmoCount = 1000;  
+                        ProjectileWeapon->ChamberLoadedAmmo = 1000;       
+                        ProjectileWeapon->MagazineSize = 1000;             
+                        ProjectileWeapon->ChamberSize = 1000;
+
                     }
                 }
             }
         }
-        if (gl::Exploits::bMagicBullet) {
-            // Ensure LocalCharacter is valid
-            if (LocalCharacter) {
-                SDK::AWeapon* CurrentWeapon = static_cast<SDK::AWeapon*>(LocalCharacter->Inventory->CurrentWeapon.Get());
-                // Ensure CurrentWeapon is valid and of type AProjectileWeapon
-                if (CurrentWeapon) {
-                    // Attempt to cast CurrentWeapon to AProjectileWeapon
-                    SDK::AProjectileWeapon* ProjectileWeapon = static_cast<SDK::AProjectileWeapon*>(CurrentWeapon);
-                    // Check if the cast was successful
-                    if (ProjectileWeapon) {
-                        SDK::FVector_NetQuantize BulletLocation = static_cast<SDK::FVector_NetQuantize>(closest_actor_head);
-                        SDK::TArray<SDK::FVector_NetQuantizeNormal> BulletDirections;
-
-                        // Create an instance of FVector_NetQuantizeNormal and set its values
-                        SDK::FVector_NetQuantizeNormal direction;
-                        direction.X = 1.0f;
-                        direction.Y = 1.0f;
-                        direction.Z = 1.0f;
-                        BulletDirections.Add(direction);
-
-                        // Call the multicast function on the ProjectileWeapon instance
-                        ProjectileWeapon->MulticastFireBullet(BulletLocation, BulletDirections, true);
-                    }
-                }
-            }
-        }
-
-
-
 
 
 
@@ -475,20 +464,71 @@ void GameLoop()
         }
     }
 
-    if (closest_actor && gl::Aimbot::Aimbot )
+    if (closest_actor && gl::Aimbot::Aimbot)
     {
         if (GetAsyncKeyState(VK_RBUTTON))
         {
             LogMessage("Right mouse button is pressed");
             SmoothAim(MyController->GetControlRotation(), closest_actor_rotation, 5.0f); // Adjust '5.0f' for different smoothness
         }
+        //K2_GetActorLocation();
+        //auto LocalCharacter = reinterpret_cast<SDK::AHumanPlayerCharacter*>(MyController->Character);
 
     }
+    if (gl::Exploits::bMagicBullet) {
+        auto LocalCharacter = reinterpret_cast<SDK::AHumanPlayerCharacter*>(MyController->Character);
+        LogMessage("magic si on");
 
-    
-    
-    
+        if (LocalCharacter) {
+
+
+
+            auto CurrentWeapon = LocalCharacter->Inventory->CurrentWeapon.Get();
+
+            if (CurrentWeapon) {
+                SDK::AProjectileWeapon* ProjectileWeapon = static_cast<SDK::AProjectileWeapon*>(CurrentWeapon);
+
+
+                if (ProjectileWeapon) {
+
+                    SDK::FVector headLocation = closest_actor_head;
+
+                    SDK::FVector_NetQuantize BulletLocation;
+                    BulletLocation.X = headLocation.X;
+                    BulletLocation.Y = headLocation.Y;
+                    BulletLocation.Z = headLocation.Z;
+
+
+                    SDK::TArray<SDK::FVector_NetQuantizeNormal> BulletDirections;
+
+
+                    SDK::FVector directionVector = headLocation - LocalCharacter->K2_GetActorLocation();
+                    directionVector.Normalize();
+
+
+                    SDK::FVector_NetQuantizeNormal direction;
+                    direction.X = directionVector.X;
+                    direction.Y = directionVector.Y;
+                    direction.Z = directionVector.Z;
+
+                    BulletDirections.Add(direction);
+
+                    LogMessage("shoot");
+                    ProjectileWeapon->MulticastFireBullet(BulletLocation, BulletDirections, false);
+
+                }
+
+            }
+
+
+        }
+        else {
+            LogMessage("Character is null!");
+        }
+    }
+
 }
+
 
 
 
@@ -536,6 +576,7 @@ void DrawESP()
             SDK::FVector2D ScreenPos;
             if (WorldToScreen(Character->K2_GetActorLocation(), &ScreenPos))
             {
+                auto health = Character->HealthComponent->GetHealth();
                 float Distance = Character->GetDistanceTo(MyController->Pawn);
                 float ScaleFactor = (Distance > 0) ? (Distance / 1500.0f) : 1.0f; 
 
@@ -543,6 +584,29 @@ void DrawESP()
                 drawList->AddRect(ImVec2(ScreenPos.X - BoxSize.x / 2, ScreenPos.Y - BoxSize.y / 2),
                     ImVec2(ScreenPos.X + BoxSize.x / 2, ScreenPos.Y + BoxSize.y / 2),
                     IM_COL32(0, 255, 0, 255));
+                // Draw health bar
+                float healthPercentage = health / 100.0f; // Assuming health is correctly updated
+                if (healthPercentage > 1.0f) healthPercentage = 1.0f; // Cap at 100%
+                if (healthPercentage < 0.0f) healthPercentage = 0.0f; // Prevent negative values
+
+                float healthBarWidth = BoxSize.x * healthPercentage; // Adjust width based on health
+                float healthBarHeight = 5.0f / ScaleFactor;
+                ImVec2 healthBarPos(ScreenPos.X - BoxSize.x / 2, ScreenPos.Y - BoxSize.y / 2 - healthBarHeight - 2);
+
+                // Draw background of the health bar (full bar)
+                drawList->AddRectFilled(
+                    healthBarPos,
+                    ImVec2(healthBarPos.x + BoxSize.x, healthBarPos.y + healthBarHeight),
+                    IM_COL32(255, 0, 0, 255)
+                );
+
+                // Draw foreground of the health bar (current health)
+                drawList->AddRectFilled(
+                    healthBarPos,
+                    ImVec2(healthBarPos.x + healthBarWidth, healthBarPos.y + healthBarHeight),
+                    IM_COL32(0, 255, 0, 255) // Green color for remaining health
+                );
+        
       
             }
         }
@@ -588,27 +652,21 @@ void DrawTextAt(const char* text, ImVec2 position, ImColor color, bool center)
 
 
 
-typedef float(__fastcall* AddTrueHealth_t)(SDK::UHealthComponent*, float);
-AddTrueHealth_t OriginalAddTrueHealth = nullptr;
 
-typedef SDK::TArray<SDK::TSubclassOf<SDK::AItemSkin>>(__fastcall* GetAllAvailableItemSkins_t)(SDK::AHumanPlayerController* Player, SDK::TSubclassOf<SDK::AItem> Item);
-GetAllAvailableItemSkins_t OriginalGetAllAvailableItemSkins = nullptr;
+typedef void(__fastcall* tOnTakeDamage)(SDK::AHumanCharacter*, float, SDK::EDamageType, const SDK::AHumanCharacter*, SDK::TSubclassOf<SDK::AItem>, const struct SDK::FHitResultSimplified&, const SDK::TArray<SDK::TSubclassOf<SDK::AItem>>&);
+tOnTakeDamage OriginalOnTakeDamage = nullptr;
 
-typedef SDK::TArray<SDK::TSubclassOf<SDK::AWeaponSkin>>(__fastcall* GetAllAvailableWeaponSkins_t)(SDK::AHumanPlayerController* Player, SDK::TSubclassOf<SDK::AWeapon> Weapon);
-GetAllAvailableWeaponSkins_t OriginalGetAllAvailableWeaponSkins = nullptr;
+void __fastcall HookedOnTakeDamage(SDK::AHumanCharacter* pThis, float DamageAmount, SDK::EDamageType DamageType, const SDK::AHumanCharacter* InstigatingActor, SDK::TSubclassOf<SDK::AItem> InstigatingItemClass, const struct SDK::FHitResultSimplified& HitOptimised, const SDK::TArray<SDK::TSubclassOf<SDK::AItem>>& AffectedItems) {
+    if (gl::Exploits::GodMode) {
+        LogMessage("GodMode is active: Ignoring damage.");
+        DamageAmount = 0; // Set damage to 0
+    }
 
-// Hooked functions (make sure the return types and parameters are correct)
-SDK::TArray<SDK::TSubclassOf<SDK::AItemSkin>> __fastcall HookedGetAllAvailableItemSkins(SDK::AHumanPlayerController* Player, SDK::TSubclassOf<SDK::AItem> Item) {
-    SDK::TArray<SDK::TSubclassOf<SDK::AItemSkin>> skins = OriginalGetAllAvailableItemSkins(Player, Item);
-    LogMessage("Available Item Skins Count: " + std::to_string(skins.Num()));
-    return skins;
+    LogMessage("GodMode is not on buddy: Ignoring damage.");
+    OriginalOnTakeDamage(pThis, DamageAmount, DamageType, InstigatingActor, InstigatingItemClass, HitOptimised, AffectedItems);
 }
 
-SDK::TArray<SDK::TSubclassOf<SDK::AWeaponSkin>> __fastcall HookedGetAllAvailableWeaponSkins(SDK::AHumanPlayerController* Player, SDK::TSubclassOf<SDK::AWeapon> Weapon) {
-    SDK::TArray<SDK::TSubclassOf<SDK::AWeaponSkin>> weaponSkins = OriginalGetAllAvailableWeaponSkins(Player, Weapon);
-    LogMessage("Available Weapon Skins Count: " + std::to_string(weaponSkins.Num()));
-    return weaponSkins;
-}
+
 
 float __fastcall HookedAddTrueHealth(SDK::UHealthComponent* healthComponent, float Amount) {
     LogMessage("Adding true health: " + std::to_string(Amount));
@@ -620,6 +678,7 @@ SDK::UHealthComponent* HealthComponentInstance = nullptr;
 SDK::USkinFunctions* USkinFunctionsInstance = nullptr;
 // Function prototype
 void SetupHooks();
+
 void SetupHooks() {
     MH_STATUS status = MH_Initialize();
     if (status != MH_OK) {
@@ -627,46 +686,31 @@ void SetupHooks() {
         return;
     }
 
-    // Hook GetAllAvailableItemSkins
-    status = MH_CreateHook(
-        reinterpret_cast<LPVOID>(SDK::USkinFunctions::GetAllAvailableItemSkins),
-        &HookedGetAllAvailableItemSkins,
-        reinterpret_cast<LPVOID*>(&OriginalGetAllAvailableItemSkins)
-    );
-    if (status != MH_OK) {
-        LogMessage("Failed to create hook for GetAllAvailableItemSkins! Error: " + std::string(MH_StatusToString(status)));
-        return;
-    }
+    // Assuming you have access to the local character instance
+    auto LocalCharacter = reinterpret_cast<SDK::AHumanPlayerCharacter*>(MyController->Character); // Replace with how you access the local character instance
 
+    if (LocalCharacter) {
+        // Get the vtable of the character
+        uintptr_t* characterVTable = *reinterpret_cast<uintptr_t**>(LocalCharacter);
+        OriginalOnTakeDamage = reinterpret_cast<tOnTakeDamage>(characterVTable[83]);  // Replace with the correct vtable index for OnTakeDamage
 
-    // Hook GetAllAvailableWeaponSkins
-    status = MH_CreateHook(
-        reinterpret_cast<LPVOID>(SDK::USkinFunctions::GetAllAvailableWeaponSkins),
-        &HookedGetAllAvailableWeaponSkins,
-        reinterpret_cast<LPVOID*>(&OriginalGetAllAvailableWeaponSkins)
-    );
-    if (status != MH_OK) {
-        LogMessage("Failed to create hook for GetAllAvailableWeaponSkins!");
-        return;
-    }
-
-    if (HealthComponentInstance) {
-        uintptr_t* healthVTable = *reinterpret_cast<uintptr_t**>(HealthComponentInstance);
-        OriginalAddTrueHealth = reinterpret_cast<AddTrueHealth_t>(healthVTable[1]);
+        // Hook the OnTakeDamage function
         status = MH_CreateHook(
-            reinterpret_cast<LPVOID>(OriginalAddTrueHealth),
-            &HookedAddTrueHealth,
-            reinterpret_cast<LPVOID*>(&OriginalAddTrueHealth)
+            reinterpret_cast<LPVOID>(OriginalOnTakeDamage),
+            &HookedOnTakeDamage,
+            reinterpret_cast<LPVOID*>(&OriginalOnTakeDamage)
         );
+
         if (status != MH_OK) {
-            LogMessage("Failed to create hook for AddTrueHealth!");
+            LogMessage("Failed to create hook for OnTakeDamage! Error: " + std::string(MH_StatusToString(status)));
             return;
         }
     }
     else {
-        LogMessage("HealthComponentInstance is not initialized!");
+        LogMessage("LocalCharacter is not initialized!");
     }
 
+    // Enable all hooks
     if (MH_EnableHook(MH_ALL_HOOKS) != MH_OK) {
         LogMessage("Failed to enable hooks!");
         return;
@@ -679,7 +723,6 @@ DWORD WINAPI HookThread(LPVOID hModule) {
     SetupHooks();
     return 0;
 }
-
 
 
 
@@ -701,13 +744,13 @@ void RenderESP()
        ImGui::Checkbox("Enable Aimbot", &gl::Aimbot::Aimbot);
        ImGui::Checkbox("Enable Unlimited stamina", &gl::Exploits::FastAcceleration);
       // ImGui::Checkbox("Enable add health", &gl::Exploits::AddHealth);
-      // ImGui::Checkbox("Magic bullet", &gl::Exploits::bMagicBullet);
+      //ImGui::Checkbox("Magic bullet", &gl::Exploits::bMagicBullet);
        if (gl::Aimbot::Aimbot)
        {
            ImGui::SliderFloat("Aimbot FOV", &gl::Aimbot::Fov, 10.0f, 360.0f);
        }
 
-      // ImGui::Checkbox("God Mode", &gl::Exploits::GodMode);
+    // ImGui::Checkbox("God Mode", &gl::Exploits::GodModee);
        ImGui::Checkbox("Unlimited ammo", &gl::Exploits::Ammo);
 
 
@@ -870,7 +913,7 @@ HRESULT APIENTRY MJPresent(IDXGISwapChain3* pSwapChain, UINT SyncInterval, UINT 
         }
 
     }
-    if (gl::Exploits::GodMode)
+    if (gl::Exploits::GodModee)
     {
         GameLoop();
     }
@@ -891,7 +934,10 @@ HRESULT APIENTRY MJPresent(IDXGISwapChain3* pSwapChain, UINT SyncInterval, UINT 
         GameLoop();
    
     }
-
+    if (gl::Exploits::WeaponSkin)
+    {
+        GameLoop();
+    }
 
 
 
